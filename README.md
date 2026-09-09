@@ -1,0 +1,139 @@
+# agy-paperclip-adapter
+
+A [Paperclip](https://github.com/paperclipai/paperclip) adapter for **agy**, the Antigravity CLI.
+
+Gemini CLI is deprecated for personal use, which leaves the built-in `gemini_local`
+adapter without a viable lane. This package registers a new `agy_local` adapter that
+drives `agy` instead, keeping the same Paperclip behaviours: heartbeat prompts,
+conversation resume across wakes, live tool-call rendering, token accounting, and
+"Test Connection".
+
+It installs as an **external adapter plugin** — no Paperclip fork or patch required.
+
+## Requirements
+
+- Paperclip with external adapter support (`@paperclipai/adapter-utils` >= 2026.8.0)
+- Node.js >= 24.11.0
+- `agy` on `PATH`, already signed in to Antigravity
+
+Verify agy independently first:
+
+```bash
+agy --version
+agy models      # must print a model table; empty output means you are not signed in
+```
+
+## Install
+
+### From a local checkout
+
+```bash
+git clone https://github.com/<owner>/agy-paperclip-adapter.git
+cd agy-paperclip-adapter
+npm install
+npm run build          # dist/ is not committed, so this step is required
+```
+
+Then register it in Paperclip: **Settings → Adapters → Install adapter**, choose
+"local path", and point it at the checkout directory.
+
+Registration is an instance-admin action, so it must be done from a board session.
+Agent API tokens get `403 Board access required` on `POST /api/adapters/install`.
+
+### From npm
+
+Once published, install by package name from the same screen, or:
+
+```bash
+curl -X POST "$PAPERCLIP_API_URL/api/adapters/install" \
+  -H "Content-Type: application/json" \
+  -d '{"packageName":"agy-paperclip-adapter"}'
+```
+
+After installing, create or edit an agent and set its adapter to
+**Antigravity CLI (agy)**, then use **Test Connection** to confirm agy is installed
+and authenticated.
+
+## Configuration
+
+| Field | Default | Notes |
+|---|---|---|
+| `command` | `agy` | Executable name or absolute path |
+| `model` | `auto` | `auto` lets agy choose; otherwise any id from `agy models` |
+| `effort` | *(unset)* | `low` \| `medium` \| `high` → `agy --effort` |
+| `agyAgent` | *(unset)* | Named agy agent → `agy --agent` |
+| `cwd` | *(unset)* | Fallback working directory when no workspace is attached |
+| `instructionsFilePath` | *(unset)* | Markdown instructions prepended to every prompt |
+| `promptTemplate` | Paperclip default | Overrides the heartbeat prompt |
+| `bootstrapPromptTemplate` | *(unset)* | Injected only on the first run of a conversation |
+| `sandbox` | `false` | `agy --sandbox`; off because Paperclip owns the boundary |
+| `disableSlashCommands` | `false` | `agy --disable-slash-commands` |
+| `extraArgs` | `[]` | Extra agy arguments |
+| `env` | *(unset)* | `KEY=VALUE` per line, passed to the child process |
+| `timeoutSec` | `3600` | Paperclip run timeout |
+| `graceSec` | `15` | SIGTERM grace period |
+
+Models available through Antigravity at the time of writing include Gemini 3.1 Pro,
+Gemini 3.6–3.8 Flash, Claude Sonnet 4.6, Claude Opus 4.6 and GPT-OSS 120B. The
+adapter discovers the live list from `agy models` rather than hardcoding it, so new
+models appear without an adapter release.
+
+## The one thing worth knowing
+
+**agy does not treat its process working directory as the workspace.** Launched with
+cwd set to a project directory, it still wrote its output to
+`~/.gemini/antigravity-cli/scratch/`. Passing `--add-dir <cwd>` fixes it.
+
+This adapter therefore *always* passes `--add-dir`. Without it, agent edits land
+outside the Paperclip workspace and silently vanish — no error, no diff, nothing to
+review. `test/parse.test.js` asserts the flag is present so it cannot regress.
+
+## Behaviour notes
+
+- **Non-interactive:** runs use `--print` with `--output-format stream-json`, plus
+  `--dangerously-skip-permissions` because an unattended heartbeat cannot answer a
+  permission prompt.
+- **Timeouts:** `agy --print-timeout` is set just *below* Paperclip's `timeoutSec`, so
+  agy exits on its own and still emits a result event carrying the conversation id,
+  rather than being killed mid-stream with the session handle lost.
+- **Session resume:** the agy `conversation_id` is stored as `sessionParams` and replayed
+  via `--conversation`. A conversation is only resumed when its recorded `cwd` matches
+  the current one, because an agy conversation is bound to the directory it was created
+  in. A conversation that no longer exists triggers exactly one retry from scratch.
+- **Usage:** agy's result event totals the whole invocation, so the adapter reports
+  `usageBasis: "per_run"`. Reporting it as cumulative would double-count.
+- **Billing:** reported as a Google subscription. `provider` reflects the *upstream*
+  model vendor, since Antigravity also fronts Anthropic and OpenAI models.
+- **Failure classification:** auth, quota and transient-network failures get distinct
+  error codes (`agy_auth_required`, `agy_quota_exhausted`, `agy_network_unavailable`) so
+  Paperclip can retry or escalate appropriately instead of treating every failure alike.
+- **Truncated streams:** a run that never emits a result event is reported as failed,
+  not as a silent success, and still bills the tokens the last step reported.
+
+## Development
+
+```bash
+npm install
+npm run build
+npm test                       # 29 unit tests over captured agy fixtures
+
+node scripts/verify-loader.mjs "$PWD"   # replays Paperclip's plugin-loader, hits live agy
+node scripts/verify-e2e.mjs             # real agy runs: workspace binding + resume + stale session
+```
+
+`scripts/verify-e2e.mjs` makes real model calls and consumes quota. It asserts the
+three things unit tests cannot: that files land in the workspace, that a resumed
+conversation remembers the previous turn, and that a stale conversation id is refused.
+
+See [docs/DESIGN.md](docs/DESIGN.md) for the adapter contract and the agy stream-json
+protocol reference.
+
+## Status
+
+Verified end to end against agy 1.1.28 and Paperclip 2026.831.1 on macOS (arm64):
+loader validation, live model discovery, environment probe, workspace binding, session
+resume, and stale-session rejection all pass. Linux and Windows are untested.
+
+## License
+
+MIT
