@@ -1,0 +1,303 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import {
+  AGY_WORKSPACE_SKILL_SUBPATH,
+  listSkills,
+  resolveAgySkillRoot,
+  sanitizeAgentIdSegment,
+  syncSkills,
+} from "../dist/skills.js";
+import { buildAgyArgs, describeAgyArgs } from "../dist/args.js";
+
+const AGENT_ID = "30223245-91b7-48df-bedb-5f5049b05c38";
+
+async function makeTempDir() {
+  return fs.mkdtemp(path.join(os.tmpdir(), "agy-skills-test-"));
+}
+
+/** Build a runtime skill tree the way Paperclip materializes one. */
+async function writeSkillSource(root, name, body) {
+  const dir = path.join(root, name);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, "SKILL.md"),
+    `---\nname: ${name}\ndescription: ${body}\n---\n\n${body}\n`,
+  );
+  return dir;
+}
+
+function skillConfig(sourceDirs, extra = {}) {
+  return {
+    paperclipRuntimeSkills: Object.entries(sourceDirs).map(([key, source]) => ({
+      key,
+      runtimeName: key.split("/").pop(),
+      source,
+    })),
+    ...extra,
+  };
+}
+
+// ── Path resolution ─────────────────────────────────────────────────────────
+
+test("agent scope puts skills under a per-agent .agents/skills root", () => {
+  const root = resolveAgySkillRoot({ config: {}, agentId: AGENT_ID, homeDir: "/home/u" });
+  assert.equal(root.scope, "agent");
+  assert.equal(root.addDir, path.join("/home/u", ".agy-paperclip", "agents", AGENT_ID));
+  assert.equal(root.skillsHome, path.join(root.addDir, AGY_WORKSPACE_SKILL_SUBPATH));
+  // The subpath is what agy actually scans beneath an --add-dir root.
+  assert.equal(AGY_WORKSPACE_SKILL_SUBPATH, path.join(".agents", "skills"));
+});
+
+test("agent scope honours an explicit skillsRootPath and appends .agents/skills to it", () => {
+  const root = resolveAgySkillRoot({
+    config: { skillsRootPath: "/srv/agy-skills" },
+    agentId: AGENT_ID,
+    homeDir: "/home/u",
+  });
+  assert.equal(root.addDir, path.resolve("/srv/agy-skills"));
+  assert.equal(root.skillsHome, path.join("/srv/agy-skills", ".agents", "skills"));
+});
+
+test("global scope targets agy's config skills dir and needs no --add-dir", () => {
+  const root = resolveAgySkillRoot({
+    config: { skillsScope: "global", skillsRootPath: "/ignored" },
+    agentId: AGENT_ID,
+    homeDir: "/home/u",
+  });
+  assert.equal(root.scope, "global");
+  assert.equal(root.skillsHome, path.join("/home/u", ".gemini", "config", "skills"));
+  // agy scans this root unconditionally; adding it as a workspace dir would give
+  // the agent write access to the operator's whole agy configuration.
+  assert.equal(root.addDir, null);
+});
+
+test("never resolves to ~/.gemini/skills, which agy does not scan", () => {
+  const dead = path.join("/home/u", ".gemini", "skills");
+  for (const config of [{}, { skillsScope: "global" }, { skillsScope: "GLOBAL" }]) {
+    const root = resolveAgySkillRoot({ config, agentId: AGENT_ID, homeDir: "/home/u" });
+    assert.notEqual(root.skillsHome, dead);
+  }
+});
+
+test("an unrecognized skillsScope falls back to per-agent rather than the shared root", () => {
+  const root = resolveAgySkillRoot({
+    config: { skillsScope: "workspace" },
+    agentId: AGENT_ID,
+    homeDir: "/home/u",
+  });
+  assert.equal(root.scope, "agent");
+});
+
+test("agent ids are reduced to a single safe path segment", () => {
+  assert.equal(sanitizeAgentIdSegment(AGENT_ID), AGENT_ID);
+  // Traversal collapses into an inert single segment: separators are gone and
+  // the result is not "." or "..", so it cannot escape the skills root.
+  assert.equal(sanitizeAgentIdSegment("../../etc"), "..-..-etc");
+  assert.equal(sanitizeAgentIdSegment(".."), "unknown-agent");
+  assert.equal(sanitizeAgentIdSegment("  "), "unknown-agent");
+  assert.ok(!sanitizeAgentIdSegment("a/b/c").includes(path.sep));
+});
+
+// ── Argument construction ───────────────────────────────────────────────────
+
+const BASE_ARGS = {
+  prompt: "hi",
+  conversationId: null,
+  model: "",
+  effort: "",
+  cwd: "/work/repo",
+  skillsAddDir: null,
+  sandbox: false,
+  disableSlashCommands: false,
+  agyAgent: "",
+  timeoutSec: 600,
+  extraArgs: [],
+};
+
+test("the skill root is added as a second --add-dir, after the workspace", () => {
+  const args = buildAgyArgs({ ...BASE_ARGS, skillsAddDir: "/home/u/.agy-paperclip/agents/a1" });
+  const addDirValues = args.flatMap((value, i) => (value === "--add-dir" ? [args[i + 1]] : []));
+  // Order matters: agy treats the first added directory as the primary
+  // workspace, so the skill root must never come first.
+  assert.deepEqual(addDirValues, ["/work/repo", "/home/u/.agy-paperclip/agents/a1"]);
+});
+
+test("no skill root means exactly one --add-dir", () => {
+  const args = buildAgyArgs(BASE_ARGS);
+  assert.equal(args.filter((value) => value === "--add-dir").length, 1);
+});
+
+test("a skill root equal to the workspace is not added twice", () => {
+  const args = buildAgyArgs({ ...BASE_ARGS, skillsAddDir: "/work/repo/" });
+  assert.equal(args.filter((value) => value === "--add-dir").length, 1);
+});
+
+test("the operator notes explain the extra --add-dir", () => {
+  const notes = describeAgyArgs({
+    cwd: "/work/repo",
+    sandbox: false,
+    timeoutSec: 600,
+    skillsAddDir: "/home/u/.agy-paperclip/agents/a1",
+  });
+  assert.ok(notes.some((note) => note.includes(".agents/skills")));
+  assert.ok(
+    describeAgyArgs({ cwd: "/work/repo", sandbox: false, timeoutSec: 600 }).every(
+      (note) => !note.includes(".agents/skills"),
+    ),
+  );
+});
+
+// ── listSkills / syncSkills ─────────────────────────────────────────────────
+
+test("listSkills reports desired-but-unsynced skills as missing", async (t) => {
+  const tmp = await makeTempDir();
+  t.after(() => fs.rm(tmp, { recursive: true, force: true }));
+  const src = await writeSkillSource(path.join(tmp, "src"), "alpha", "Alpha skill");
+
+  const config = skillConfig(
+    { "paperclipai/paperclip/alpha": src },
+    {
+      skillsRootPath: path.join(tmp, "root"),
+      paperclipSkillSync: { desiredSkills: ["paperclipai/paperclip/alpha"] },
+    },
+  );
+  const snapshot = await listSkills({
+    agentId: AGENT_ID,
+    companyId: "c1",
+    adapterType: "agy_local",
+    config,
+  });
+
+  assert.equal(snapshot.adapterType, "agy_local");
+  assert.equal(snapshot.supported, true);
+  assert.equal(snapshot.mode, "persistent");
+  const alpha = snapshot.entries.find((entry) => entry.runtimeName === "alpha");
+  assert.equal(alpha.desired, true);
+  assert.equal(alpha.state, "missing");
+});
+
+test("syncSkills links desired skills into the agy skills home", async (t) => {
+  const tmp = await makeTempDir();
+  t.after(() => fs.rm(tmp, { recursive: true, force: true }));
+  const alpha = await writeSkillSource(path.join(tmp, "src"), "alpha", "Alpha skill");
+  const beta = await writeSkillSource(path.join(tmp, "src"), "beta", "Beta skill");
+  const rootPath = path.join(tmp, "root");
+
+  const config = skillConfig(
+    { "paperclipai/paperclip/alpha": alpha, "paperclipai/paperclip/beta": beta },
+    { skillsRootPath: rootPath },
+  );
+  const snapshot = await syncSkills(
+    { agentId: AGENT_ID, companyId: "c1", adapterType: "agy_local", config },
+    ["paperclipai/paperclip/alpha"],
+  );
+
+  const skillsHome = path.join(rootPath, ".agents", "skills");
+  // The link must resolve to a readable SKILL.md — a dangling link is exactly
+  // the silent failure this hook exists to prevent.
+  assert.equal(
+    await fs.realpath(path.join(skillsHome, "alpha")),
+    await fs.realpath(alpha),
+  );
+  assert.match(await fs.readFile(path.join(skillsHome, "alpha", "SKILL.md"), "utf8"), /Alpha skill/);
+  assert.equal(await fs.lstat(path.join(skillsHome, "beta")).catch(() => null), null);
+
+  const alphaEntry = snapshot.entries.find((entry) => entry.runtimeName === "alpha");
+  assert.equal(alphaEntry.state, "installed");
+  assert.equal(alphaEntry.managed, true);
+});
+
+test("syncSkills removes a link it owns once the skill is no longer desired", async (t) => {
+  const tmp = await makeTempDir();
+  t.after(() => fs.rm(tmp, { recursive: true, force: true }));
+  const alpha = await writeSkillSource(path.join(tmp, "src"), "alpha", "Alpha skill");
+  const rootPath = path.join(tmp, "root");
+  const ctx = {
+    agentId: AGENT_ID,
+    companyId: "c1",
+    adapterType: "agy_local",
+    config: skillConfig({ "paperclipai/paperclip/alpha": alpha }, { skillsRootPath: rootPath }),
+  };
+
+  await syncSkills(ctx, ["paperclipai/paperclip/alpha"]);
+  await syncSkills(ctx, []);
+
+  const skillsHome = path.join(rootPath, ".agents", "skills");
+  assert.equal(await fs.lstat(path.join(skillsHome, "alpha")).catch(() => null), null);
+});
+
+test("syncSkills leaves an unmanaged directory in the skills home alone", async (t) => {
+  const tmp = await makeTempDir();
+  t.after(() => fs.rm(tmp, { recursive: true, force: true }));
+  const alpha = await writeSkillSource(path.join(tmp, "src"), "alpha", "Alpha skill");
+  const rootPath = path.join(tmp, "root");
+  const skillsHome = path.join(rootPath, ".agents", "skills");
+
+  // A hand-installed skill occupying the same name.
+  await writeSkillSource(skillsHome, "alpha", "Operator's own alpha");
+
+  const snapshot = await syncSkills(
+    {
+      agentId: AGENT_ID,
+      companyId: "c1",
+      adapterType: "agy_local",
+      config: skillConfig({ "paperclipai/paperclip/alpha": alpha }, { skillsRootPath: rootPath }),
+    },
+    ["paperclipai/paperclip/alpha"],
+  );
+
+  assert.match(
+    await fs.readFile(path.join(skillsHome, "alpha", "SKILL.md"), "utf8"),
+    /Operator's own alpha/,
+  );
+  const entry = snapshot.entries.find((item) => item.runtimeName === "alpha");
+  assert.equal(entry.state, "external");
+  assert.ok(snapshot.warnings.some((warning) => warning.includes("alpha")));
+});
+
+test("syncSkills skips a skill whose source never materialized", async (t) => {
+  const tmp = await makeTempDir();
+  t.after(() => fs.rm(tmp, { recursive: true, force: true }));
+  const rootPath = path.join(tmp, "root");
+  const config = {
+    skillsRootPath: rootPath,
+    paperclipRuntimeSkills: [
+      {
+        key: "paperclipai/paperclip/ghost",
+        runtimeName: "ghost",
+        source: path.join(tmp, "src", "ghost"),
+        sourceStatus: "missing",
+        missingDetail: "version snapshot deleted",
+      },
+    ],
+  };
+
+  const snapshot = await syncSkills(
+    { agentId: AGENT_ID, companyId: "c1", adapterType: "agy_local", config },
+    ["paperclipai/paperclip/ghost"],
+  );
+
+  // A dangling link reads to agy as a broken skill; absence is the safer state.
+  const skillsHome = path.join(rootPath, ".agents", "skills");
+  assert.equal(await fs.lstat(path.join(skillsHome, "ghost")).catch(() => null), null);
+  assert.equal(
+    snapshot.entries.find((entry) => entry.runtimeName === "ghost").state,
+    "missing",
+  );
+});
+
+test("global scope warns that the skills home is shared across agents", async (t) => {
+  const tmp = await makeTempDir();
+  t.after(() => fs.rm(tmp, { recursive: true, force: true }));
+  const snapshot = await listSkills({
+    agentId: AGENT_ID,
+    companyId: "c1",
+    adapterType: "agy_local",
+    config: { skillsScope: "global", paperclipRuntimeSkills: [] },
+  });
+  assert.ok(snapshot.warnings.some((warning) => warning.includes("shares")));
+});

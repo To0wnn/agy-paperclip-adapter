@@ -80,6 +80,29 @@ export async function getConfigSchema(): Promise<AdapterConfigSchema> {
         group: "Runtime",
       },
       {
+        key: "skillsScope",
+        label: "Skills location",
+        type: "select",
+        default: "agent",
+        options: [
+          { value: "agent", label: "Per-agent (recommended)" },
+          { value: "global", label: "Shared agy config (~/.gemini/config/skills)" },
+        ],
+        hint:
+          "Per-agent keeps each agent's skills in its own directory, delivered with an extra --add-dir. " +
+          "Shared writes into agy's global skills directory, visible to every agy agent on this host.",
+        group: "Skills",
+      },
+      {
+        key: "skillsRootPath",
+        label: "Per-agent skills root",
+        type: "text",
+        hint:
+          "Optional. Overrides the directory that holds this agent's skills; agy reads them from " +
+          "<root>/.agents/skills. Ignored when Skills location is set to the shared agy config.",
+        group: "Skills",
+      },
+      {
         key: "instructionsFilePath",
         label: "Instructions file",
         type: "text",

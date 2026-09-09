@@ -15,6 +15,7 @@ import { ADAPTER_LABEL, ADAPTER_TYPE } from "./constants.js";
 import { execute } from "./execute.js";
 import { DEFAULT_AGY_MODEL, listAgyModels, modelProfiles, models, refreshAgyModels } from "./models.js";
 import { sessionCodec, sessionManagement } from "./session.js";
+import { listSkills, syncSkills } from "./skills.js";
 import { testEnvironment } from "./test-environment.js";
 
 function getRuntimeCommandSpec(config: Record<string, unknown>): AdapterRuntimeCommandSpec {
@@ -46,14 +47,17 @@ export function createServerAdapter(): ServerAdapterModule {
     getConfigSchema,
     getRuntimeCommandSpec,
     agentConfigurationDoc,
+    listSkills,
+    syncSkills,
     // Paperclip may mint a local agent JWT so the agent can call the control plane.
     supportsLocalAgentJwt: true,
     // External adapters must opt in explicitly; this adapter reads
     // config.instructionsFilePath and prepends the bundle to the run prompt.
     supportsInstructionsBundle: true,
     instructionsPathKey: "instructionsFilePath",
-    // The adapter passes skills through the prompt, not a scanned directory.
-    requiresMaterializedRuntimeSkills: false,
+    // agy scans a skills directory rather than reading config, so Paperclip must
+    // materialize runtime skill entries on disk before syncSkills can link them.
+    requiresMaterializedRuntimeSkills: true,
   };
 }
 
@@ -64,6 +68,14 @@ export { execute } from "./execute.js";
 export { testEnvironment } from "./test-environment.js";
 export { getConfigSchema } from "./config-schema.js";
 export { sessionCodec, sessionManagement } from "./session.js";
+export {
+  listSkills,
+  syncSkills,
+  resolveAgySkillRoot,
+  sanitizeAgentIdSegment,
+  AGY_WORKSPACE_SKILL_SUBPATH,
+} from "./skills.js";
+export type { AgySkillRoot, AgySkillScope } from "./skills.js";
 export { buildAgyArgs, describeAgyArgs, resolveAgyPrintTimeoutSec } from "./args.js";
 export {
   parseAgyJsonl,

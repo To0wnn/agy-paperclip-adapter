@@ -96,6 +96,84 @@ Mitigations:
 - `scripts/verify-e2e.mjs` asserts a real file lands in a real workspace.
 - The behaviour is documented in the README and `agentConfigurationDoc`.
 
+## Skill delivery
+
+agy has a first-class skill loader, so Paperclip skills are delivered as skills rather
+than injected into the prompt. Paperclip's own skills already ship as `SKILL.md` with
+`name`/`description` frontmatter, which is exactly agy's format — the sync is a link,
+not a translation.
+
+### Which roots agy scans
+
+Determined empirically against agy 1.1.28 by planting uniquely-tokened skills and asking
+the model to enumerate and use them (no assumption of Claude Code parity):
+
+| Root | Scanned | Evidence |
+|---|---|---|
+| `~/.gemini/config/skills/<name>/` | yes | listed as `probe-cfgroot` |
+| `<workspace>/.agents/skills/<name>/` | yes | listed as `probe-wsagents` |
+| `<secondary --add-dir>/.agents/skills/<name>/` | yes | listed as `probe-adddir2` |
+| symlinked skill dir in a scanned root | yes | returned `TOKEN-SYMLINK-7788` through the link |
+| `~/.gemini/skills/<name>/` | no | absent from enumeration |
+| `<workspace>/.gemini/skills/`, `<workspace>/.claude/skills/` | no | absent from enumeration |
+
+The third row is the design unlock. Because *every* `--add-dir` root contributes its own
+`.agents/skills` tree, and the adapter already passes `--add-dir <cwd>` to bind the
+workspace, a second `--add-dir` can carry a Paperclip-owned skill root — no writes into
+the user's repository, no host-wide shared state, and no conflict with the HEA-33
+workspace binding.
+
+The fifth row is the reason this feature was filed. `~/.gemini/skills` is where the
+deprecated `gemini_local` lane linked Paperclip's skills, and it still contains a
+`paperclip` symlink on hosts that ran it. agy never reads that directory, so those skills
+were silently absent. `resolveAgySkillRoot()` can never produce that path and a unit test
+asserts it.
+
+### Scopes
+
+| `skillsScope` | Skills home | `--add-dir` | Isolation |
+|---|---|---|---|
+| `agent` (default) | `~/.agy-paperclip/agents/<agentId>/.agents/skills` | extra root appended after the workspace | per agent |
+| `global` | `~/.gemini/config/skills` | none needed | shared by every agy agent on the host |
+
+`resolveAgySkillRoot()` is a pure function of `(config, agentId, homeDir)`. That is what
+lets `execute()` derive the same `--add-dir` that `syncSkills()` wrote to without any
+shared state between the two call paths — they are separate Paperclip API entry points
+and never see each other's results.
+
+Ordering matters: the workspace `--add-dir` is emitted first, because agy treats the
+first added directory as the primary workspace. A skill root promoted to that position
+would relocate the run.
+
+### Sync semantics
+
+`syncSkills()` symlinks each desired skill into the skills home and reports through
+`buildPersistentSkillSnapshot()` (`mode: "persistent"`). Symlinks rather than copies mean
+the agent always reads the live skill version, and drift is detectable by comparing link
+targets.
+
+Three cases are handled conservatively, because the skills home may contain skills the
+operator installed by hand — especially under `global` scope:
+
+- **Unmanaged directory occupying a desired name** — left alone, reported `external`,
+  and a warning is emitted. Paperclip never overwrites it.
+- **Skill whose source never materialized** (`sourceStatus: "missing"`) — skipped rather
+  than linked. A dangling link reads to agy as a *broken* skill, which is worse than an
+  absent one.
+- **Un-desiring a skill** — only symlinks whose target is a known Paperclip skill source
+  are removed. A real directory, or a symlink pointing somewhere else, is left in place.
+
+`requiresMaterializedRuntimeSkills` is `true`: agy scans a directory, so Paperclip must
+write the skill trees to disk before `syncSkills()` can link them.
+
+### Remote targets
+
+The skill root is a path on the Paperclip host and does not exist inside an SSH or
+sandbox target. `execute()` detects this, skips the extra `--add-dir`, and logs a note
+pointing the operator at `skillsScope: "global"` with a provisioned
+`~/.gemini/config/skills` in the target. Pointing agy at a nonexistent directory would
+just fail the run.
+
 ## Session model
 
 `sessionParams` is `{ conversationId, cwd, workspaceId?, repoUrl?, repoRef? }`.
@@ -172,9 +250,10 @@ a zero exit code would otherwise read as success.
   false pass when a remote target is configured.
 - **No ACP lane.** agy exposes no ACP server, so unlike `claude_local` and
   `gemini_local` there is no `acp` descriptor.
-- **No skill sync.** `listSkills`/`syncSkills` are unimplemented; agy's skill directory
-  layout has not been verified. `instructionsFilePath` covers agent instructions in the
-  meantime. This is the most likely next feature.
+- **Skills are local-target only.** `listSkills`/`syncSkills` are implemented against
+  agy's real skill loader (see *Skill delivery*), but only for local execution. A remote
+  target needs its skills provisioned in the target's own
+  `~/.gemini/config/skills`.
 - **No login capability.** agy's login is an interactive browser flow with no
   scriptable `setup-token`-style equivalent, so no `loginCapability` is declared.
   Authentication is a one-time manual `agy` run, which `testEnvironment()` verifies by
@@ -193,7 +272,10 @@ Against agy 1.1.28 and Paperclip 2026.831.1, macOS arm64:
 | Workspace binding (real file write) | pass — file landed in workspace |
 | Session resume (real recall) | pass — same id, model recalled prior turn |
 | Stale-session rejection | pass — refused resume, warned, new id |
-| Unit tests | 29/29 pass |
+| Skill root discovery (6 candidate roots) | pass — 3 scanned, 3 not; symlinks resolve |
+| `listSkills`/`syncSkills` via loader replay | pass — `mode = persistent` |
+| Skill sync reaches the model | pass — model returned the synced skill's random token from an empty workspace |
+| Unit tests | 45/45 pass |
 
 Not yet done: registration in a running Paperclip instance (needs instance-admin), and
 any Linux or Windows testing.

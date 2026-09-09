@@ -1,6 +1,6 @@
 {
   "name": "agy-paperclip-adapter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Paperclip adapter for agy, the Antigravity CLI — replaces the deprecated gemini_local lane for personal use",
   "license": "MIT",
   "type": "module",
