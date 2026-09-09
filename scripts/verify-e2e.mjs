@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createServerAdapter } from "./dist/index.js";
+import { createServerAdapter } from "../dist/index.js";
 
 const adapter = createServerAdapter();
 const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "agy-e2e-"));

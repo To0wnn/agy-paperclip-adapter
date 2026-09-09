@@ -35,6 +35,7 @@ import type {
   AdapterExecutionContext,
   AdapterExecutionResult,
 } from "@paperclipai/adapter-utils";
+import fs from "node:fs/promises";
 import path from "node:path";
 
 import { buildAgyArgs, describeAgyArgs } from "./args.js";
@@ -50,6 +51,7 @@ import {
 } from "./parse.js";
 import { buildAgyPrompt } from "./prompt.js";
 import { sessionCodec } from "./session.js";
+import { resolveAgySkillRoot } from "./skills.js";
 
 const DEFAULT_TIMEOUT_SEC = 3600;
 const DEFAULT_GRACE_SEC = 15;
@@ -168,6 +170,29 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     await ensureAbsoluteDirectory(cwd, { createIfMissing: true });
   }
 
+  // ── Skills ────────────────────────────────────────────────────────────────
+  // In "agent" scope the synced skills live outside the workspace, so the run
+  // needs a second --add-dir to see them. The directory is only added when it
+  // actually exists: agy rejects an --add-dir pointing at nothing, and an agent
+  // whose skills have never been synced has no such directory yet.
+  const skillRoot = resolveAgySkillRoot({ config, agentId: agent.id });
+  let skillsAddDir: string | null = null;
+  if (skillRoot.addDir && !executionTargetIsRemote) {
+    const skillsHomeExists = await fs
+      .stat(skillRoot.skillsHome)
+      .then((stats) => stats.isDirectory())
+      .catch(() => false);
+    if (skillsHomeExists) skillsAddDir = skillRoot.addDir;
+  } else if (skillRoot.addDir && executionTargetIsRemote) {
+    // The skill root is a path on the Paperclip host; it does not exist inside
+    // an SSH/sandbox target, so pointing agy at it there would just fail.
+    await onLog(
+      "stdout",
+      `[paperclip] Skills synced to ${skillRoot.skillsHome} are not delivered to remote execution targets; ` +
+        `set skillsScope to "global" and provision ~/.gemini/config/skills in the target instead.\n`,
+    );
+  }
+
   // ── Environment ───────────────────────────────────────────────────────────
   const env: Record<string, string> = { ...buildPaperclipEnv(agent) };
   env.PAPERCLIP_RUN_ID = runId;
@@ -223,7 +248,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   });
 
   const commandNotes = [
-    ...describeAgyArgs({ cwd: effectiveExecutionCwd, sandbox, timeoutSec }),
+    ...describeAgyArgs({ cwd: effectiveExecutionCwd, sandbox, timeoutSec, skillsAddDir }),
     ...built.notes,
   ];
 
@@ -234,6 +259,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       model,
       effort,
       cwd: effectiveExecutionCwd,
+      skillsAddDir,
       sandbox,
       disableSlashCommands,
       agyAgent,

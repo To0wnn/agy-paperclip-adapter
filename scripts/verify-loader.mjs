@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 import path from "node:path";
 import fs from "node:fs";
 
-const pkgDir = process.argv[2];
+const pkgDir = path.resolve(process.argv[2] ?? ".");
 const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8"));
 
 // resolvePackageEntryPoint()
@@ -27,6 +27,20 @@ for (const fn of ["execute", "testEnvironment"]) {
   if (typeof adapter[fn] !== "function") throw new Error(`FAIL: ${fn} is not a function`);
 }
 console.log("required methods: OK");
+
+// Optional skill-sync surface. agy has a real skill loader, so these must be
+// present — without them Paperclip silently delivers no skills to an agy run.
+for (const fn of ["listSkills", "syncSkills"]) {
+  if (typeof adapter[fn] !== "function") throw new Error(`FAIL: ${fn} is not a function`);
+}
+if (adapter.requiresMaterializedRuntimeSkills !== true) {
+  throw new Error("FAIL: syncSkills needs materialized runtime skill entries on disk");
+}
+const skillCtx = { agentId: "loader-probe", companyId: "c", adapterType: adapter.type, config: {} };
+const skillSnapshot = await adapter.listSkills(skillCtx);
+if (skillSnapshot.adapterType !== adapter.type) throw new Error("FAIL: skill snapshot adapterType mismatch");
+if (skillSnapshot.mode !== "persistent") throw new Error(`FAIL: unexpected skill mode ${skillSnapshot.mode}`);
+console.log("skill hooks: OK | mode =", skillSnapshot.mode, "| entries =", skillSnapshot.entries.length);
 
 // ui-parser extraction (extractUiParserSource)
 const uiExp = pkg.exports?.["./ui-parser"];

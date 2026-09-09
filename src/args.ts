@@ -9,6 +9,8 @@
  * Paperclip workspace will never see.
  */
 
+import path from "node:path";
+
 export interface BuildAgyArgsInput {
   prompt: string;
   /** Conversation to resume, or null to start fresh. */
@@ -19,6 +21,13 @@ export interface BuildAgyArgsInput {
   effort: string;
   /** Absolute working directory the run must operate in. */
   cwd: string;
+  /**
+   * Extra directory holding this agent's synced skills (`<root>/.agents/skills`),
+   * or null when skills live somewhere agy scans unconditionally. agy reads a
+   * `.agents/skills` tree under *every* `--add-dir` root, which is what lets
+   * Paperclip deliver skills without writing into the workspace repo.
+   */
+  skillsAddDir: string | null;
   sandbox: boolean;
   disableSlashCommands: boolean;
   /** Named agy agent, or "" for the default. */
@@ -64,7 +73,14 @@ export function buildAgyArgs(input: BuildAgyArgsInput): string[] {
   if (input.disableSlashCommands) args.push("--disable-slash-commands");
 
   // See the module comment: this is what actually binds agy to the workspace.
+  // It must come first — agy treats the first added directory as the primary
+  // workspace, and a skill root promoted to that position would relocate the run.
   if (input.cwd.trim().length > 0) args.push("--add-dir", input.cwd);
+
+  const skillsAddDir = input.skillsAddDir?.trim() ?? "";
+  if (skillsAddDir.length > 0 && path.resolve(skillsAddDir) !== path.resolve(input.cwd)) {
+    args.push("--add-dir", skillsAddDir);
+  }
 
   const printTimeoutSec = resolveAgyPrintTimeoutSec(input.timeoutSec);
   if (printTimeoutSec > 0) args.push("--print-timeout", `${printTimeoutSec}s`);
@@ -78,12 +94,21 @@ export function buildAgyArgs(input: BuildAgyArgsInput): string[] {
 }
 
 /** Operator-facing notes explaining the non-obvious flags. */
-export function describeAgyArgs(input: Pick<BuildAgyArgsInput, "cwd" | "sandbox" | "timeoutSec">): string[] {
+export function describeAgyArgs(
+  input: Pick<BuildAgyArgsInput, "cwd" | "sandbox" | "timeoutSec"> &
+    Partial<Pick<BuildAgyArgsInput, "skillsAddDir">>,
+): string[] {
   const notes = [
     "Prompt is passed to agy via --print for non-interactive execution.",
     "Added --dangerously-skip-permissions so unattended runs never block on a permission prompt.",
     `Added --add-dir ${input.cwd} — agy does not treat its process cwd as the workspace, so this binds the run to the Paperclip workspace.`,
   ];
+  const skillsAddDir = input.skillsAddDir?.trim() ?? "";
+  if (skillsAddDir.length > 0 && path.resolve(skillsAddDir) !== path.resolve(input.cwd)) {
+    notes.push(
+      `Added --add-dir ${skillsAddDir} so agy loads the Paperclip skills synced to ${skillsAddDir}/.agents/skills.`,
+    );
+  }
   const printTimeoutSec = resolveAgyPrintTimeoutSec(input.timeoutSec);
   if (printTimeoutSec > 0) {
     notes.push(

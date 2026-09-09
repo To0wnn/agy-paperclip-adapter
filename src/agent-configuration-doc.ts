@@ -26,6 +26,11 @@ Core fields:
 - disableSlashCommands (boolean, optional): pass agy --disable-slash-commands
 - extraArgs (string[], optional): additional agy arguments
 - env (object, optional): KEY=VALUE environment variables for the agy child process
+- skillsScope (string, optional): "agent" (default) keeps this agent's Paperclip skills in its own
+  root, delivered with an extra --add-dir. "global" uses agy's shared ~/.gemini/config/skills,
+  which every agy agent on the host can see.
+- skillsRootPath (string, optional): overrides the per-agent skill root. agy reads skills from
+  <root>/.agents/skills. Ignored when skillsScope is "global".
 
 Operational fields:
 - timeoutSec (number, optional): run timeout in seconds (default 3600)
@@ -51,6 +56,14 @@ Notes:
   models.
 - Authentication uses the local agy login. Run \`agy\` interactively once and complete the
   Antigravity sign-in; "Test Connection" verifies this by listing models.
-- Paperclip skill injection is not yet wired up for this adapter. Use \`instructionsFilePath\`
-  to supply agent instructions.
+- **Skills.** Paperclip skills are synced as real agy skills, not prompt text — agy reads
+  \`<name>/SKILL.md\` in the same format Paperclip already ships. By default each agent gets a
+  private skill root at \`~/.agy-paperclip/agents/<agentId>/.agents/skills\`, passed to the run as
+  a second \`--add-dir\`; nothing is written into your repository.
+- Do not place skills in \`~/.gemini/skills\`. The deprecated \`gemini_local\` lane used that path
+  and agy does not read it, so skills there are silently invisible to the model.
+- Skill sync covers local execution only. On an SSH or sandbox target the skill root does not
+  exist, so set skillsScope to "global" and provision \`~/.gemini/config/skills\` inside the target.
+- \`instructionsFilePath\` remains the way to supply always-on agent instructions; skills are
+  loaded on demand by the model.
 `;

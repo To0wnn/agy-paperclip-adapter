@@ -66,6 +66,8 @@ and authenticated.
 | `instructionsFilePath` | *(unset)* | Markdown instructions prepended to every prompt |
 | `promptTemplate` | Paperclip default | Overrides the heartbeat prompt |
 | `bootstrapPromptTemplate` | *(unset)* | Injected only on the first run of a conversation |
+| `skillsScope` | `agent` | `agent` = per-agent skill root delivered with an extra `--add-dir`; `global` = agy's shared `~/.gemini/config/skills` |
+| `skillsRootPath` | *(unset)* | Overrides the per-agent skill root; agy reads skills from `<root>/.agents/skills`. Ignored when `skillsScope` is `global` |
 | `sandbox` | `false` | `agy --sandbox`; off because Paperclip owns the boundary |
 | `disableSlashCommands` | `false` | `agy --disable-slash-commands` |
 | `extraArgs` | `[]` | Extra agy arguments |
@@ -87,6 +89,42 @@ cwd set to a project directory, it still wrote its output to
 This adapter therefore *always* passes `--add-dir`. Without it, agent edits land
 outside the Paperclip workspace and silently vanish — no error, no diff, nothing to
 review. `test/parse.test.js` asserts the flag is present so it cannot regress.
+
+## Skills
+
+Paperclip skills are delivered to agy as real skills, not as prompt text. agy has its
+own skill loader that reads `<name>/SKILL.md` with `name`/`description` frontmatter —
+the same shape Paperclip already ships — so sync is a symlink, not a transform.
+
+Which directories agy actually scans was established by probing agy 1.1.28 with
+uniquely-tokened skills and asking the model to enumerate and use them:
+
+| Root | Scanned |
+|---|---|
+| `~/.gemini/config/skills/<name>/SKILL.md` | yes |
+| `<any --add-dir root>/.agents/skills/<name>/SKILL.md` | yes |
+| symlinked skill directory inside a scanned root | yes |
+| `~/.gemini/skills/<name>/SKILL.md` | **no** |
+| `<workspace>/.claude/skills`, `<workspace>/.gemini/skills` | **no** |
+
+That every `--add-dir` root contributes its own `.agents/skills` tree is what makes the
+default `skillsScope: "agent"` possible: each agent gets a private skill root under
+`~/.agy-paperclip/agents/<agentId>/`, passed as a second `--add-dir` after the workspace
+one. Nothing is written into your repository, and two agy agents on the same host do not
+share a skill set.
+
+Set `skillsScope: "global"` to use agy's shared `~/.gemini/config/skills` instead. It
+needs no extra flag, but every agy agent on the host then sees the same skills, and
+`listSkills` returns a warning saying so.
+
+> **`~/.gemini/skills` is a trap.** The deprecated `gemini_local` lane linked Paperclip
+> skills there and agy does not read it. Skills placed in that directory are silently
+> invisible — no error, no warning, just a model that has never heard of them. This
+> adapter never targets it, and a unit test asserts no configuration can resolve to it.
+
+Remote execution targets are not covered: the skill root is a path on the Paperclip
+host, so `execute()` logs a note and skips the extra `--add-dir` rather than pointing agy
+at a directory that does not exist in the target.
 
 ## Behaviour notes
 
@@ -115,15 +153,22 @@ review. `test/parse.test.js` asserts the flag is present so it cannot regress.
 ```bash
 npm install
 npm run build
-npm test                       # 29 unit tests over captured agy fixtures
+npm test                       # 45 unit tests over captured agy fixtures
 
 node scripts/verify-loader.mjs "$PWD"   # replays Paperclip's plugin-loader, hits live agy
 node scripts/verify-e2e.mjs             # real agy runs: workspace binding + resume + stale session
+node scripts/verify-skill-sync.mjs      # real agy run: proves a synced skill reaches the model
 ```
 
 `scripts/verify-e2e.mjs` makes real model calls and consumes quota. It asserts the
 three things unit tests cannot: that files land in the workspace, that a resumed
 conversation remembers the previous turn, and that a stale conversation id is refused.
+
+`scripts/verify-skill-sync.mjs` is the same idea for skills, and it deliberately does
+*not* assert on file presence. It syncs a skill containing a random token, runs agy
+against an empty workspace, and asserts the model returns that token — the only way it
+can, since the token exists nowhere else. A skill directory agy silently ignores is the
+failure mode that matters, and only a behavioural assertion catches it.
 
 See [docs/DESIGN.md](docs/DESIGN.md) for the adapter contract and the agy stream-json
 protocol reference.
@@ -132,7 +177,8 @@ protocol reference.
 
 Verified end to end against agy 1.1.28 and Paperclip 2026.831.1 on macOS (arm64):
 loader validation, live model discovery, environment probe, workspace binding, session
-resume, and stale-session rejection all pass. Linux and Windows are untested.
+resume, stale-session rejection, and skill sync (token returned by the model from a
+synced skill) all pass. Linux and Windows are untested.
 
 ## License
 
