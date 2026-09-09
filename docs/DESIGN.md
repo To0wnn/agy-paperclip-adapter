@@ -184,6 +184,14 @@ Without it agy runs simply had no skills, which is the same silent omission as t
 `~/.gemini/skills` trap above, one layer up. `scripts/verify-run-skills.mjs` asserts on
 this path specifically: against the pre-fix build the model answers `NO_SKILL`.
 
+That script authors its own skill fixture, which leaves the source layout unverified —
+it proves the adapter handles a hand-written skill directory, not the one the Paperclip
+server writes for a company skill. `scripts/verify-company-skill.mjs` takes the real
+directory instead. Confirmed against `hea38-agy-skill-probe`, created through
+`POST /api/companies/{id}/skills`: the server materializes a company skill as a plain
+`SKILL.md` with `name`/`description` frontmatter, which is byte-for-byte what agy's
+loader expects, so no transform is needed on the way in.
+
 Only `agent` scope reconciles per run. The `global` root is shared by every agy agent on
 the host, so pruning it on each run would let one agent delete another's skills
 mid-flight; it stays under explicit `syncSkills()` control. A sync failure is logged and
