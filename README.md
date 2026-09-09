@@ -153,11 +153,12 @@ at a directory that does not exist in the target.
 ```bash
 npm install
 npm run build
-npm test                       # 45 unit tests over captured agy fixtures
+npm test                       # 49 unit tests over captured agy fixtures
 
 node scripts/verify-loader.mjs "$PWD"   # replays Paperclip's plugin-loader, hits live agy
 node scripts/verify-e2e.mjs             # real agy runs: workspace binding + resume + stale session
 node scripts/verify-skill-sync.mjs      # real agy run: proves a synced skill reaches the model
+node scripts/verify-run-skills.mjs      # real agy run: proves execute() alone delivers skills
 ```
 
 `scripts/verify-e2e.mjs` makes real model calls and consumes quota. It asserts the
@@ -170,6 +171,11 @@ against an empty workspace, and asserts the model returns that token — the onl
 can, since the token exists nowhere else. A skill directory agy silently ignores is the
 failure mode that matters, and only a behavioural assertion catches it.
 
+`scripts/verify-run-skills.mjs` narrows that further to the path a real heartbeat takes:
+no `syncSkills()` call at all, just `execute()` with the skill entries in run config, the
+way Paperclip's runner invokes the adapter. Against a build without run-time sync the
+model answers `NO_SKILL`.
+
 See [docs/DESIGN.md](docs/DESIGN.md) for the adapter contract and the agy stream-json
 protocol reference.
 
@@ -177,8 +183,9 @@ protocol reference.
 
 Verified end to end against agy 1.1.28 and Paperclip 2026.831.1 on macOS (arm64):
 loader validation, live model discovery, environment probe, workspace binding, session
-resume, stale-session rejection, and skill sync (token returned by the model from a
-synced skill) all pass. Linux and Windows are untested.
+resume, stale-session rejection, and skill delivery — both through an explicit
+`syncSkills()` call and through `execute()` alone, each proved by the model returning a
+token that exists only inside the synced skill — all pass. Linux and Windows are untested.
 
 ## License
 

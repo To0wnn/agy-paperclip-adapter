@@ -192,6 +192,57 @@ function warningsForRoot(root: AgySkillRoot): string[] {
   ];
 }
 
+export interface RunSkillSync {
+  root: AgySkillRoot;
+  /** Null when the run performed no sync (global scope, or nothing to deliver). */
+  snapshot: AdapterSkillSnapshot | null;
+  /** Skill keys this run expected to be present. */
+  desiredSkills: string[];
+  warnings: string[];
+}
+
+/**
+ * Reconcile this agent's skill root from the entries Paperclip put in the run
+ * config, before the run starts.
+ *
+ * This exists because the heartbeat runner never calls `syncSkills`: it resolves
+ * the agent's runtime skill entries, puts them in `config.paperclipRuntimeSkills`
+ * and hands that to `execute`, expecting the adapter to materialize them for the
+ * run (the same contract `requiresMaterializedRuntimeSkills` describes). Without
+ * this, skills only reached agy after somebody hit "sync" in the skills UI, and
+ * run-scoped skills — the ones the runner adds because a skill was mentioned in
+ * the issue thread — never reached it at all. Both are the silent-omission
+ * failure mode this module exists to prevent.
+ *
+ * Only "agent" scope syncs per run: that root belongs to this agent alone, so
+ * reconciling it is safe. The "global" root is shared by every agy agent on the
+ * host, and pruning it on each run would let agents delete each other's skills,
+ * so it stays under explicit `syncSkills` control.
+ */
+export async function syncSkillsForRun(input: {
+  config: Record<string, unknown>;
+  agentId: string;
+  companyId: string;
+}): Promise<RunSkillSync> {
+  const { config, agentId, companyId } = input;
+  const root = resolveAgySkillRoot({ config, agentId });
+  const availableEntries = await readAvailableEntries(config);
+  const desiredSkills = resolveLegacyPaperclipDesiredSkillNames(config, availableEntries);
+
+  if (root.scope === "global") {
+    return { root, snapshot: null, desiredSkills, warnings: [] };
+  }
+  if (desiredSkills.length === 0 && availableEntries.length === 0) {
+    return { root, snapshot: null, desiredSkills, warnings: [] };
+  }
+
+  const snapshot = await syncSkills(
+    { agentId, companyId, adapterType: ADAPTER_TYPE, config },
+    desiredSkills,
+  );
+  return { root, snapshot, desiredSkills, warnings: snapshot.warnings };
+}
+
 export async function syncSkills(
   ctx: AdapterSkillContext,
   desiredSkills: string[],

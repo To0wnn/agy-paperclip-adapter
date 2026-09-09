@@ -166,6 +166,29 @@ operator installed by hand — especially under `global` scope:
 `requiresMaterializedRuntimeSkills` is `true`: agy scans a directory, so Paperclip must
 write the skill trees to disk before `syncSkills()` can link them.
 
+### Two entry points, and why `execute()` syncs too
+
+Paperclip reaches skills through two independent paths, and an adapter that implements
+only the first delivers nothing during real runs:
+
+1. **`POST /agents/:id/skills/sync`** — the skills UI. Calls `syncSkills()` directly.
+2. **The heartbeat runner** — never calls `syncSkills()`. It resolves the agent's runtime
+   skill entries, puts them in `config.paperclipRuntimeSkills`, and calls `execute()`,
+   which is expected to materialize them for the run.
+
+So `execute()` calls `syncSkillsForRun()` before deciding on the extra `--add-dir`. Two
+things depend on it: an agent whose skills were configured but never explicitly synced
+(most of them), and *run-scoped* skills — the ones the runner adds because a skill was
+mentioned in the issue thread, which by construction can never have been pre-synced.
+Without it agy runs simply had no skills, which is the same silent omission as the
+`~/.gemini/skills` trap above, one layer up. `scripts/verify-run-skills.mjs` asserts on
+this path specifically: against the pre-fix build the model answers `NO_SKILL`.
+
+Only `agent` scope reconciles per run. The `global` root is shared by every agy agent on
+the host, so pruning it on each run would let one agent delete another's skills
+mid-flight; it stays under explicit `syncSkills()` control. A sync failure is logged and
+the run continues — a missing skill is worth reporting, not worth killing the run over.
+
 ### Remote targets
 
 The skill root is a path on the Paperclip host and does not exist inside an SSH or
@@ -275,7 +298,8 @@ Against agy 1.1.28 and Paperclip 2026.831.1, macOS arm64:
 | Skill root discovery (6 candidate roots) | pass — 3 scanned, 3 not; symlinks resolve |
 | `listSkills`/`syncSkills` via loader replay | pass — `mode = persistent` |
 | Skill sync reaches the model | pass — model returned the synced skill's random token from an empty workspace |
-| Unit tests | 45/45 pass |
+| Skills reach the model via `execute()` alone (heartbeat path) | pass — token returned with no prior `syncSkills()` call; the same probe answers `NO_SKILL` against the pre-fix build |
+| Unit tests | 49/49 pass |
 
 Not yet done: registration in a running Paperclip instance (needs instance-admin), and
 any Linux or Windows testing.

@@ -51,7 +51,7 @@ import {
 } from "./parse.js";
 import { buildAgyPrompt } from "./prompt.js";
 import { sessionCodec } from "./session.js";
-import { resolveAgySkillRoot } from "./skills.js";
+import { resolveAgySkillRoot, syncSkillsForRun } from "./skills.js";
 
 const DEFAULT_TIMEOUT_SEC = 3600;
 const DEFAULT_GRACE_SEC = 15;
@@ -171,13 +171,38 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   }
 
   // ── Skills ────────────────────────────────────────────────────────────────
-  // In "agent" scope the synced skills live outside the workspace, so the run
-  // needs a second --add-dir to see them. The directory is only added when it
-  // actually exists: agy rejects an --add-dir pointing at nothing, and an agent
-  // whose skills have never been synced has no such directory yet.
-  const skillRoot = resolveAgySkillRoot({ config, agentId: agent.id });
+  // The heartbeat runner does not call syncSkills before a run; it puts the
+  // agent's runtime skill entries in config.paperclipRuntimeSkills and expects
+  // the adapter to materialize them here. So reconcile the skill root first,
+  // then decide whether to pass it to agy.
+  //
+  // In "agent" scope the skills live outside the workspace, so the run needs a
+  // second --add-dir to see them. The directory is only added when it actually
+  // exists: agy rejects an --add-dir pointing at nothing, and an agent with no
+  // skills at all has no such directory.
+  let skillRoot = resolveAgySkillRoot({ config, agentId: agent.id });
   let skillsAddDir: string | null = null;
   if (skillRoot.addDir && !executionTargetIsRemote) {
+    try {
+      const runSync = await syncSkillsForRun({
+        config,
+        agentId: agent.id,
+        companyId: agent.companyId,
+      });
+      skillRoot = runSync.root;
+      for (const warning of runSync.warnings) {
+        await onLog("stdout", `[paperclip] skill sync: ${warning}\n`);
+      }
+    } catch (err) {
+      // A failed sync must not take the run down — the agent still works, it
+      // just may be missing skills, and saying so is more useful than a crash.
+      await onLog(
+        "stdout",
+        `[paperclip] Skill sync failed; the run continues without freshly synced skills: ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
+      );
+    }
     const skillsHomeExists = await fs
       .stat(skillRoot.skillsHome)
       .then((stats) => stats.isDirectory())

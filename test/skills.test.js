@@ -10,6 +10,7 @@ import {
   resolveAgySkillRoot,
   sanitizeAgentIdSegment,
   syncSkills,
+  syncSkillsForRun,
 } from "../dist/skills.js";
 import { buildAgyArgs, describeAgyArgs } from "../dist/args.js";
 
@@ -300,4 +301,115 @@ test("global scope warns that the skills home is shared across agents", async (t
     config: { skillsScope: "global", paperclipRuntimeSkills: [] },
   });
   assert.ok(snapshot.warnings.some((warning) => warning.includes("shares")));
+});
+
+// ── syncSkillsForRun (the heartbeat path) ───────────────────────────────────
+//
+// The runner never calls syncSkills before a run: it puts the agent's runtime
+// skill entries in config.paperclipRuntimeSkills and hands that to execute().
+// These cover that path specifically — reaching the skills home only through
+// run config, never through an explicit sync call.
+
+test("syncSkillsForRun materializes skills from run config with no prior sync", async (t) => {
+  const tmp = await makeTempDir();
+  t.after(() => fs.rm(tmp, { recursive: true, force: true }));
+  const alpha = await writeSkillSource(path.join(tmp, "src"), "alpha", "Alpha skill");
+  const rootPath = path.join(tmp, "root");
+
+  const result = await syncSkillsForRun({
+    agentId: AGENT_ID,
+    companyId: "c1",
+    config: skillConfig(
+      { "paperclipai/paperclip/alpha": alpha },
+      {
+        skillsRootPath: rootPath,
+        paperclipSkillSync: { desiredSkills: ["paperclipai/paperclip/alpha"] },
+      },
+    ),
+  });
+
+  const skillsHome = path.join(rootPath, ".agents", "skills");
+  assert.match(await fs.readFile(path.join(skillsHome, "alpha", "SKILL.md"), "utf8"), /Alpha skill/);
+  assert.equal(result.root.addDir, path.resolve(rootPath));
+  assert.equal(
+    result.snapshot.entries.find((entry) => entry.runtimeName === "alpha").state,
+    "installed",
+  );
+});
+
+test("syncSkillsForRun delivers the operational skill even with an empty desired set", async (t) => {
+  const tmp = await makeTempDir();
+  t.after(() => fs.rm(tmp, { recursive: true, force: true }));
+  const operational = await writeSkillSource(path.join(tmp, "src"), "paperclip", "Operational");
+  const rootPath = path.join(tmp, "root");
+
+  // An agent configured with no skills still needs the operational skill: it is
+  // how a CLI runner reaches the Paperclip API at all.
+  const result = await syncSkillsForRun({
+    agentId: AGENT_ID,
+    companyId: "c1",
+    config: skillConfig(
+      { "paperclipai/paperclip/paperclip": operational },
+      { skillsRootPath: rootPath, paperclipSkillSync: { desiredSkills: [] } },
+    ),
+  });
+
+  assert.ok(result.desiredSkills.includes("paperclipai/paperclip/paperclip"));
+  assert.match(
+    await fs.readFile(path.join(rootPath, ".agents", "skills", "paperclip", "SKILL.md"), "utf8"),
+    /Operational/,
+  );
+});
+
+test("syncSkillsForRun drops a link once the run config stops asking for it", async (t) => {
+  const tmp = await makeTempDir();
+  t.after(() => fs.rm(tmp, { recursive: true, force: true }));
+  const alpha = await writeSkillSource(path.join(tmp, "src"), "alpha", "Alpha skill");
+  const rootPath = path.join(tmp, "root");
+  const sources = { "paperclipai/paperclip/alpha": alpha };
+
+  await syncSkillsForRun({
+    agentId: AGENT_ID,
+    companyId: "c1",
+    config: skillConfig(sources, {
+      skillsRootPath: rootPath,
+      paperclipSkillSync: { desiredSkills: ["paperclipai/paperclip/alpha"] },
+    }),
+  });
+  await syncSkillsForRun({
+    agentId: AGENT_ID,
+    companyId: "c1",
+    config: skillConfig(sources, {
+      skillsRootPath: rootPath,
+      paperclipSkillSync: { desiredSkills: [] },
+    }),
+  });
+
+  assert.equal(
+    await fs.lstat(path.join(rootPath, ".agents", "skills", "alpha")).catch(() => null),
+    null,
+  );
+});
+
+test("syncSkillsForRun leaves the shared global root untouched", async (t) => {
+  const tmp = await makeTempDir();
+  t.after(() => fs.rm(tmp, { recursive: true, force: true }));
+  const alpha = await writeSkillSource(path.join(tmp, "src"), "alpha", "Alpha skill");
+
+  // Every agy agent on the host shares the global root, so reconciling it on
+  // each run would let one agent prune another's skills mid-flight.
+  const result = await syncSkillsForRun({
+    agentId: AGENT_ID,
+    companyId: "c1",
+    config: skillConfig(
+      { "paperclipai/paperclip/alpha": alpha },
+      {
+        skillsScope: "global",
+        paperclipSkillSync: { desiredSkills: ["paperclipai/paperclip/alpha"] },
+      },
+    ),
+  });
+
+  assert.equal(result.snapshot, null);
+  assert.equal(result.root.scope, "global");
 });
