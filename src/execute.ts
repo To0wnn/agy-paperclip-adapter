@@ -51,7 +51,7 @@ import {
 } from "./parse.js";
 import { buildAgyPrompt } from "./prompt.js";
 import { sessionCodec } from "./session.js";
-import { resolveAgySkillRoot, syncSkillsForRun } from "./skills.js";
+import { describeRunSkillSync, resolveAgySkillRoot, syncSkillsForRun } from "./skills.js";
 
 const DEFAULT_TIMEOUT_SEC = 3600;
 const DEFAULT_GRACE_SEC = 15;
@@ -190,6 +190,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         companyId: agent.companyId,
       });
       skillRoot = runSync.root;
+      // Report what landed on every run, not only when something went wrong.
+      // This receipt is the only operator-visible signal that sync ran at all:
+      // the control plane's `usedByAgents[].actualState` is hardcoded null
+      // server-side, so a working sync and a sync that never happened are
+      // otherwise indistinguishable outside the run log. See
+      // `describeRunSkillSync`.
+      for (const line of describeRunSkillSync(runSync)) {
+        await onLog("stdout", `${line}\n`);
+      }
       for (const warning of runSync.warnings) {
         await onLog("stdout", `[paperclip] skill sync: ${warning}\n`);
       }

@@ -197,6 +197,44 @@ the host, so pruning it on each run would let one agent delete another's skills
 mid-flight; it stays under explicit `syncSkills()` control. A sync failure is logged and
 the run continues — a missing skill is worth reporting, not worth killing the run over.
 
+### Observability: why the run log carries a sync receipt
+
+Skill delivery is the one thing this adapter has failed at twice, both times by silent
+omission. The obvious place to check it — `usedByAgents[].actualState` on
+`GET /api/companies/{c}/skills/{id}` — cannot report it. That field is hardcoded:
+
+```js
+// @paperclipai/server, services/company-skills.js — usage()
+desired: true,
+// Runtime adapter state is intentionally omitted from this bounded metadata read.
+actualState: null,
+```
+
+That literal is the *only* occurrence of `actualState` in the server. No column stores
+it, and `ServerAdapterModule` has no write-back hook — `listSkills()` and `syncSkills()`
+return a snapshot to whoever called the HTTP route and it is discarded after the
+response. The adapter's own snapshot is correct (`state: "installed"` with the right
+`versionId`); it simply has nowhere to put it. `GET /agents/:id/skills` invokes the
+adapter live and does show it, but the company-skills detail view never asks.
+
+So `actualState` reads identically whether sync worked or never ran, which makes it
+useless for catching exactly the failure it looks like it would catch — HEA-49 had to be
+verified by grepping a run transcript for the agent's own `view_file` call.
+
+Until that changes upstream (see `docs/UPSTREAM-PROPOSAL.md`), the run log is the only
+channel available, so `describeRunSkillSync()` emits a receipt on **every** run, not just
+on warnings. Previously a successful sync logged nothing at all — byte-identical to a
+sync that never happened. Every branch now says something: what landed, its truncated
+version id, the root it landed in, anything desired but not installed (named by key when
+Paperclip supplied no runtime entry for it), and explicit lines for "nothing assigned"
+and "skipped, global scope". All lines share the `[paperclip] skill sync:` prefix, so one
+grep over a run log answers whether delivery happened:
+
+```
+[paperclip] skill sync: 1/1 desired skill(s) installed. Root: /Users/…/.agy-paperclip/agents/71b37185-…/.agents/skills
+[paperclip] skill sync:   installed hea38-agy-skill-probe--5dc20b6f68 version=b9e4beac key=company/9a98323b-…/hea38-agy-skill-probe
+```
+
 ### Remote targets
 
 The skill root is a path on the Paperclip host and does not exist inside an SSH or

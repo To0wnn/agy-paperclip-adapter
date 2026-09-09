@@ -243,6 +243,78 @@ export async function syncSkillsForRun(input: {
   return { root, snapshot, desiredSkills, warnings: snapshot.warnings };
 }
 
+/** Prefix every skill-sync receipt line carries, so a run log can be grepped for it. */
+export const SKILL_SYNC_LOG_PREFIX = "[paperclip] skill sync:";
+
+function shortVersion(versionId: string | null | undefined): string {
+  const value = (versionId ?? "").trim();
+  if (!value) return "unpinned";
+  return value.length > 8 ? value.slice(0, 8) : value;
+}
+
+/**
+ * Render a per-run receipt for what skill sync actually did.
+ *
+ * The control plane cannot show this: `usedByAgents[].actualState` on
+ * `GET /api/companies/{c}/skills/{id}` is hardcoded `null` server-side
+ * (`@paperclipai/server` `services/company-skills.js`, `usage()`), and the
+ * `ServerAdapterModule` surface has no write-back hook — `listSkills` and
+ * `syncSkills` only *return* a snapshot to whoever called the HTTP route. So
+ * the adapter's snapshot is correct and simply never persisted anywhere an
+ * operator looks.
+ *
+ * Until that changes upstream, the run log is the only place this adapter can
+ * put the signal. Before this, a successful sync logged *nothing* — the happy
+ * path and the silent-omission failure this module exists to prevent produced
+ * byte-identical output, which is why HEA-49 had to be verified by grepping a
+ * transcript for the agent's own `view_file` call. Every branch below emits at
+ * least one line, so "synced nothing on purpose" and "never ran" stay
+ * distinguishable.
+ */
+export function describeRunSkillSync(sync: RunSkillSync): string[] {
+  const { root, snapshot, desiredSkills } = sync;
+
+  if (root.scope === "global") {
+    return [
+      `${SKILL_SYNC_LOG_PREFIX} skipped — skillsScope is "global"; ${root.skillsHome} is ` +
+        "shared host-wide and is only reconciled by an explicit sync, never per run.",
+    ];
+  }
+  if (!snapshot) {
+    return [
+      `${SKILL_SYNC_LOG_PREFIX} nothing to deliver — no skills are assigned to this agent. ` +
+        `Root: ${root.skillsHome}`,
+    ];
+  }
+
+  const desiredSet = new Set(desiredSkills);
+  const delivered = snapshot.entries.filter((entry) => entry.desired && entry.state === "installed");
+  const undelivered = snapshot.entries.filter(
+    (entry) => entry.desired && entry.state !== "installed",
+  );
+  const lines = [
+    `${SKILL_SYNC_LOG_PREFIX} ${delivered.length}/${desiredSet.size} desired skill(s) installed` +
+      `${undelivered.length > 0 ? `, ${undelivered.length} not installed` : ""}. ` +
+      `Root: ${root.skillsHome}`,
+  ];
+  for (const entry of delivered) {
+    lines.push(
+      `${SKILL_SYNC_LOG_PREFIX}   installed ${entry.runtimeName ?? "(unnamed)"} ` +
+        `version=${shortVersion(entry.versionId)} key=${entry.key}`,
+    );
+  }
+  for (const entry of undelivered) {
+    // A desired skill Paperclip never provided a runtime entry for arrives here
+    // with no runtimeName — it is only identifiable by key, and naming it is the
+    // whole point, since silent omission is how this adapter has failed twice.
+    lines.push(
+      `${SKILL_SYNC_LOG_PREFIX}   ${entry.state}` +
+        `${entry.runtimeName ? ` ${entry.runtimeName}` : ""} key=${entry.key}`,
+    );
+  }
+  return lines;
+}
+
 export async function syncSkills(
   ctx: AdapterSkillContext,
   desiredSkills: string[],

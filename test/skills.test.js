@@ -11,6 +11,8 @@ import {
   sanitizeAgentIdSegment,
   syncSkills,
   syncSkillsForRun,
+  describeRunSkillSync,
+  SKILL_SYNC_LOG_PREFIX,
 } from "../dist/skills.js";
 import { buildAgyArgs, describeAgyArgs } from "../dist/args.js";
 
@@ -412,4 +414,114 @@ test("syncSkillsForRun leaves the shared global root untouched", async (t) => {
 
   assert.equal(result.snapshot, null);
   assert.equal(result.root.scope, "global");
+});
+
+// ── Run receipt ─────────────────────────────────────────────────────────────
+// The control plane hardcodes `usedByAgents[].actualState: null`, so the run
+// log is the only place a successful sync is observable. These tests pin that
+// every branch says something: a silent happy path is the exact bug (HEA-55).
+
+test("describeRunSkillSync names each installed skill and its version", async (t) => {
+  const tmp = await makeTempDir();
+  t.after(() => fs.rm(tmp, { recursive: true, force: true }));
+  const rootPath = path.join(tmp, "root");
+  const alpha = await writeSkillSource(path.join(tmp, "src"), "alpha", "Alpha skill");
+
+  const sync = await syncSkillsForRun({
+    agentId: AGENT_ID,
+    companyId: "c1",
+    config: {
+      skillsRootPath: rootPath,
+      paperclipRuntimeSkills: [
+        {
+          key: "paperclipai/paperclip/alpha",
+          runtimeName: "alpha",
+          source: alpha,
+          versionId: "b9e4beac-92a0-4ff2-9f57-c9e66c1655c2",
+        },
+      ],
+      paperclipSkillSync: { desiredSkills: ["paperclipai/paperclip/alpha"] },
+    },
+  });
+
+  const lines = describeRunSkillSync(sync);
+  assert.ok(lines.every((line) => line.startsWith(SKILL_SYNC_LOG_PREFIX)));
+  assert.match(lines[0], /1\/1 desired skill\(s\) installed/);
+  assert.ok(lines[0].includes(sync.root.skillsHome));
+  // Truncated so the line stays readable, but long enough to identify a revision.
+  assert.match(lines[1], /installed alpha version=b9e4beac key=paperclipai\/paperclip\/alpha/);
+});
+
+test("describeRunSkillSync reports an unpinned version rather than omitting the skill", async (t) => {
+  const tmp = await makeTempDir();
+  t.after(() => fs.rm(tmp, { recursive: true, force: true }));
+  const rootPath = path.join(tmp, "root");
+  const alpha = await writeSkillSource(path.join(tmp, "src"), "alpha", "Alpha skill");
+
+  const sync = await syncSkillsForRun({
+    agentId: AGENT_ID,
+    companyId: "c1",
+    config: skillConfig(
+      { "paperclipai/paperclip/alpha": alpha },
+      {
+        skillsRootPath: rootPath,
+        paperclipSkillSync: { desiredSkills: ["paperclipai/paperclip/alpha"] },
+      },
+    ),
+  });
+
+  assert.match(describeRunSkillSync(sync).join("\n"), /installed alpha version=unpinned/);
+});
+
+test("describeRunSkillSync distinguishes 'nothing assigned' from 'never ran'", () => {
+  // An empty log line here would read exactly like a sync that never happened,
+  // which is the failure mode this receipt exists to rule out.
+  const lines = describeRunSkillSync({
+    root: resolveAgySkillRoot({ config: {}, agentId: AGENT_ID, homeDir: "/home/u" }),
+    snapshot: null,
+    desiredSkills: [],
+    warnings: [],
+  });
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /nothing to deliver — no skills are assigned to this agent/);
+});
+
+test("describeRunSkillSync explains why global scope did not sync", () => {
+  const lines = describeRunSkillSync({
+    root: resolveAgySkillRoot({ config: { skillsScope: "global" }, agentId: AGENT_ID, homeDir: "/home/u" }),
+    snapshot: null,
+    desiredSkills: ["paperclipai/paperclip/alpha"],
+    warnings: [],
+  });
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /skipped — skillsScope is "global"/);
+});
+
+test("describeRunSkillSync flags a desired skill Paperclip never provided an entry for", async (t) => {
+  const tmp = await makeTempDir();
+  t.after(() => fs.rm(tmp, { recursive: true, force: true }));
+  const rootPath = path.join(tmp, "root");
+  const alpha = await writeSkillSource(path.join(tmp, "src"), "alpha", "Alpha skill");
+
+  // "beta" is desired but has no runtime entry, so it cannot even surface as
+  // "missing" — silent omission is precisely how this adapter has failed twice.
+  const sync = await syncSkillsForRun({
+    agentId: AGENT_ID,
+    companyId: "c1",
+    config: skillConfig(
+      { "paperclipai/paperclip/alpha": alpha },
+      {
+        skillsRootPath: rootPath,
+        paperclipSkillSync: {
+          desiredSkills: ["paperclipai/paperclip/alpha", "paperclipai/paperclip/beta"],
+        },
+      },
+    ),
+  });
+
+  const joined = describeRunSkillSync(sync).join("\n");
+  assert.match(joined, /1 not installed/);
+  // No runtimeName exists for it, so the key is the only handle — it must still
+  // be named rather than dropped.
+  assert.match(joined, /missing key=paperclipai\/paperclip\/beta/);
 });

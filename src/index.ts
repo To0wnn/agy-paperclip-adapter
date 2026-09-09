@@ -71,11 +71,13 @@ export { sessionCodec, sessionManagement } from "./session.js";
 export {
   listSkills,
   syncSkills,
+  describeRunSkillSync,
   resolveAgySkillRoot,
   sanitizeAgentIdSegment,
   AGY_WORKSPACE_SKILL_SUBPATH,
+  SKILL_SYNC_LOG_PREFIX,
 } from "./skills.js";
-export type { AgySkillRoot, AgySkillScope } from "./skills.js";
+export type { AgySkillRoot, AgySkillScope, RunSkillSync } from "./skills.js";
 export { buildAgyArgs, describeAgyArgs, resolveAgyPrintTimeoutSec } from "./args.js";
 export {
   parseAgyJsonl,
