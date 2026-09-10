@@ -1,5 +1,7 @@
 # agy-paperclip-adapter
 
+[![CI](https://github.com/evgemar/agy-paperclip-adapter/actions/workflows/ci.yml/badge.svg)](https://github.com/evgemar/agy-paperclip-adapter/actions/workflows/ci.yml)
+
 A [Paperclip](https://github.com/paperclipai/paperclip) adapter for **agy**, the Antigravity CLI.
 
 Gemini CLI is deprecated for personal use, which leaves the built-in `gemini_local`
@@ -194,7 +196,12 @@ loader validation, live model discovery, environment probe, workspace binding, s
 resume, stale-session rejection, and skill delivery — both through an explicit
 `syncSkills()` call and through `execute()` alone, and for a real Paperclip company skill
 created through the control-plane API — each proved by the model returning a token that
-exists only inside the synced skill — all pass. Linux and Windows are untested.
+exists only inside the synced skill — all pass.
+
+CI (GitHub Actions) builds and runs the unit test suite on Node 24 for `ubuntu-latest`
+and `macos-latest` on every push and pull request, so the build and unit-test path is
+verified on Linux as well as macOS. Windows is untested, and the end-to-end checks above
+(which require a real, signed-in `agy` install) have only been run on macOS.
 
 ## License
 
