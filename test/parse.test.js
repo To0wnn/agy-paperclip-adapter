@@ -10,7 +10,7 @@ import {
   parseAgyJsonl,
 } from "../dist/parse.js";
 import { parseAgyModelsOutput } from "../dist/models.js";
-import { buildAgyArgs, resolveAgyPrintTimeoutSec } from "../dist/args.js";
+import { buildAgyArgs, modelHasEffortSuffix, resolveAgyPrintTimeoutSec } from "../dist/args.js";
 import { sessionCodec } from "../dist/session.js";
 import { MODELS_OUTPUT, SIMPLE_RUN, TOOL_RUN, TRUNCATED_RUN } from "./fixtures.js";
 
@@ -159,11 +159,11 @@ test("always binds the workspace with --add-dir and puts the prompt last", () =>
   assert.ok(!args.includes("--conversation"));
 });
 
-test("passes resume, model, effort and agent when configured", () => {
+test("passes resume, model, effort and agent when configured for an effort-free model", () => {
   const args = buildAgyArgs({
     prompt: "p",
     conversationId: "conv-1",
-    model: "gemini-3.1-pro-high",
+    model: "claude-sonnet-4-6",
     effort: "high",
     cwd: "/w",
     sandbox: true,
@@ -173,7 +173,7 @@ test("passes resume, model, effort and agent when configured", () => {
     extraArgs: ["--foo", "bar"],
   });
   assert.equal(args[args.indexOf("--conversation") + 1], "conv-1");
-  assert.equal(args[args.indexOf("--model") + 1], "gemini-3.1-pro-high");
+  assert.equal(args[args.indexOf("--model") + 1], "claude-sonnet-4-6");
   assert.equal(args[args.indexOf("--effort") + 1], "high");
   assert.equal(args[args.indexOf("--agent") + 1], "reviewer");
   assert.ok(args.includes("--sandbox"));
@@ -195,6 +195,48 @@ test("rejects an out-of-range effort value rather than passing it through", () =
     extraArgs: [],
   });
   assert.ok(!args.includes("--effort"));
+});
+
+test("suppresses --effort when the model id already encodes a tier", () => {
+  const args = buildAgyArgs({
+    prompt: "p",
+    conversationId: null,
+    model: "gemini-3.6-flash-high",
+    effort: "medium",
+    cwd: "/w",
+    sandbox: false,
+    disableSlashCommands: false,
+    agyAgent: "",
+    timeoutSec: 600,
+    extraArgs: [],
+  });
+  assert.equal(args[args.indexOf("--model") + 1], "gemini-3.6-flash-high");
+  assert.ok(!args.includes("--effort"), "--effort must be dropped for an effort-suffixed model");
+});
+
+test("suppresses --effort even when the requested tier matches the model's suffix", () => {
+  const args = buildAgyArgs({
+    prompt: "p",
+    conversationId: null,
+    model: "gpt-oss-120b-medium",
+    effort: "medium",
+    cwd: "/w",
+    sandbox: false,
+    disableSlashCommands: false,
+    agyAgent: "",
+    timeoutSec: 600,
+    extraArgs: [],
+  });
+  assert.ok(!args.includes("--effort"));
+});
+
+test("modelHasEffortSuffix detects effort-suffixed model ids", () => {
+  assert.ok(modelHasEffortSuffix("gemini-3.6-flash-high"));
+  assert.ok(modelHasEffortSuffix("gemini-3.6-flash-medium"));
+  assert.ok(modelHasEffortSuffix("gpt-oss-120b-medium"));
+  assert.ok(!modelHasEffortSuffix("auto"));
+  assert.ok(!modelHasEffortSuffix("claude-sonnet-4-6"));
+  assert.ok(!modelHasEffortSuffix("claude-opus-4-6-thinking"));
 });
 
 test("agy's print timeout stays under the Paperclip run timeout", () => {

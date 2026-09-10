@@ -40,6 +40,19 @@ export interface BuildAgyArgsInput {
 export const AGY_AUTO_MODEL = "auto";
 
 /**
+ * Every model agy currently exposes bakes reasoning effort into its id
+ * (`gemini-3.8-flash-high`, `gpt-oss-120b-medium`, ...). agy rejects `--model`
+ * plus `--effort` together unless the two happen to agree, so the adapter
+ * must never send both. This detects the effort-suffixed models (everything
+ * except `auto`, `claude-sonnet-4-6` and `claude-opus-4-6-thinking` today) so
+ * `--effort` can be suppressed for them regardless of what the config field
+ * says.
+ */
+export function modelHasEffortSuffix(model: string): boolean {
+  return /-(?:low|medium|high)$/i.test(model.trim());
+}
+
+/**
  * agy's own print timeout is set slightly *below* Paperclip's run timeout so
  * agy exits on its own and still emits a result event, rather than being killed
  * mid-stream by Paperclip and losing the conversation id.
@@ -59,7 +72,10 @@ export function buildAgyArgs(input: BuildAgyArgsInput): string[] {
   if (model.length > 0 && model !== AGY_AUTO_MODEL) args.push("--model", model);
 
   const effort = input.effort.trim().toLowerCase();
-  if (effort === "low" || effort === "medium" || effort === "high") {
+  // Never pass --effort alongside a model id that already encodes it — agy
+  // rejects the run outright unless the two happen to match. See
+  // modelHasEffortSuffix() above.
+  if ((effort === "low" || effort === "medium" || effort === "high") && !modelHasEffortSuffix(model)) {
     args.push("--effort", effort);
   }
 

@@ -46,7 +46,11 @@ export async function getConfigSchema(): Promise<AdapterConfigSchema> {
           { label: "High", value: "high" },
         ],
         default: "",
-        hint: "Maps to agy --effort. Leave unset to use the model's own default.",
+        hint:
+          "Maps to agy --effort. Ignored for models whose id already encodes an effort tier " +
+          "(e.g. gemini-3.8-flash-high) — agy rejects --model plus --effort together, so the " +
+          "adapter drops --effort for those. Only \"auto\", claude-sonnet-4-6 and " +
+          "claude-opus-4-6-thinking take an explicit effort value today.",
         group: "Runtime",
       },
       {

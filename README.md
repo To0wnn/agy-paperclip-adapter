@@ -60,7 +60,7 @@ and authenticated.
 |---|---|---|
 | `command` | `agy` | Executable name or absolute path |
 | `model` | `auto` | `auto` lets agy choose; otherwise any id from `agy models` |
-| `effort` | *(unset)* | `low` \| `medium` \| `high` → `agy --effort` |
+| `effort` | *(unset)* | `low` \| `medium` \| `high` → `agy --effort`. Dropped automatically when `model` already encodes an effort tier (e.g. `gemini-3.8-flash-high`) — agy rejects `--model` + `--effort` together. Only `auto`, `claude-sonnet-4-6` and `claude-opus-4-6-thinking` take an explicit value today |
 | `agyAgent` | *(unset)* | Named agy agent → `agy --agent` |
 | `cwd` | *(unset)* | Fallback working directory when no workspace is attached |
 | `instructionsFilePath` | *(unset)* | Markdown instructions prepended to every prompt |
