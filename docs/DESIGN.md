@@ -221,7 +221,7 @@ So `actualState` reads identically whether sync worked or never ran, which makes
 useless for catching exactly the failure it looks like it would catch — HEA-49 had to be
 verified by grepping a run transcript for the agent's own `view_file` call.
 
-Until that changes upstream (see `docs/UPSTREAM-PROPOSAL.md`), the run log is the only
+Until that changes upstream (filed as [paperclipai/paperclip#13129](https://github.com/paperclipai/paperclip/issues/13129)), the run log is the only
 channel available, so `describeRunSkillSync()` emits a receipt on **every** run, not just
 on warnings. Previously a successful sync logged nothing at all — byte-identical to a
 sync that never happened. Every branch now says something: what landed, its truncated
