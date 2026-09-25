@@ -525,3 +525,17 @@ test("describeRunSkillSync flags a desired skill Paperclip never provided an ent
   // be named rather than dropped.
   assert.match(joined, /missing key=paperclipai\/paperclip\/beta/);
 });
+
+// agy loads a skill only when its directory name equals the SKILL.md `name`.
+test("runtime names drop Paperclip's hash suffix unless that would collide", async () => {
+  const { agyRuntimeName, withAgyRuntimeNames } = await import("../dist/skills.js");
+  assert.equal(agyRuntimeName("werkafspraken--7b03de82a7"), "werkafspraken");
+  assert.equal(agyRuntimeName("paperclip"), "paperclip");
+  const out = withAgyRuntimeNames([
+    { key: "a", runtimeName: "organisatie--4f1ad66e59" },
+    { key: "b", runtimeName: "dup--aaaaaaaaaa" },
+    { key: "c", runtimeName: "dup--bbbbbbbbbb" },
+    { key: "d", runtimeName: "paperclip" },
+  ]);
+  assert.deepEqual(out.map((e) => e.runtimeName), ["organisatie", "dup--aaaaaaaaaa", "dup--bbbbbbbbbb", "paperclip"]);
+});

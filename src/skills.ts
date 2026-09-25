@@ -140,7 +140,32 @@ export function resolveAgySkillRoot(input: ResolveAgySkillRootInput): AgySkillRo
 async function readAvailableEntries(
   config: Record<string, unknown>,
 ): Promise<PaperclipSkillEntry[]> {
-  return readPaperclipRuntimeSkillEntries(config, moduleDir);
+  return withAgyRuntimeNames(await readPaperclipRuntimeSkillEntries(config, moduleDir));
+}
+
+/**
+ * agy only loads a skill when its directory name equals the `name` in its SKILL.md
+ * frontmatter (Claude Code is lenient here). Paperclip gives company skills a hashed
+ * runtime name such as `werkafspraken--7b03de82a7`, which agy then silently ignores —
+ * the link exists, the skill never loads. Strip that suffix so the link is named after
+ * the skill; keep the hashed name only when two entries would otherwise collide.
+ */
+export function agyRuntimeName(runtimeName: string): string {
+  return runtimeName.replace(/--[0-9a-f]{6,}$/, "");
+}
+
+export function withAgyRuntimeNames(entries: PaperclipSkillEntry[]): PaperclipSkillEntry[] {
+  const counts = new Map<string, number>();
+  for (const entry of entries) {
+    if (!entry.runtimeName) continue;
+    const base = agyRuntimeName(entry.runtimeName);
+    counts.set(base, (counts.get(base) ?? 0) + 1);
+  }
+  return entries.map((entry) => {
+    if (!entry.runtimeName) return entry;
+    const base = agyRuntimeName(entry.runtimeName);
+    return counts.get(base) === 1 ? { ...entry, runtimeName: base } : entry;
+  });
 }
 
 function buildSnapshot(options: {
