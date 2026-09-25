@@ -138,6 +138,19 @@ function applyConfiguredEnv(env: Record<string, string>, config: Record<string, 
   }
 }
 
+
+async function resolveSkillLinkTargets(skillsAddDir: string | null): Promise<string[]> {
+  if (!skillsAddDir) return [];
+  const skillsDir = path.join(skillsAddDir, ".agents", "skills");
+  const names = await fs.readdir(skillsDir).catch(() => [] as string[]);
+  const targets = new Set<string>();
+  for (const name of names) {
+    const real = await fs.realpath(path.join(skillsDir, name)).catch(() => null);
+    if (real && !real.startsWith(skillsAddDir + path.sep)) targets.add(real);
+  }
+  return [...targets].sort();
+}
+
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const { runId, agent, runtime, config, context, onLog, onMeta, onSpawn } = ctx;
 
@@ -309,6 +322,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           managedPaths: [
             { path: agyStateDir, access: "rw" as const },
             ...(skillsAddDir ? [{ path: skillsAddDir, access: "ro" as const }] : []),
+            // Skill links point outside the workspace (company skill sources, the
+            // catalog cache). Inside the sandbox those targets would be missing, the
+            // links dangle, and agy silently skips the skill — so expose each
+            // resolved link target read-only.
+            ...(await resolveSkillLinkTargets(skillsAddDir)).map((target) => ({ path: target, access: "ro" as const })),
           ],
           extraPaths: parseLocalProcessSandboxExtraPaths(config.filesystemExtraPaths),
           homeDir: filesystemScope ? os.homedir() : null,
