@@ -22,6 +22,9 @@ Core fields:
 - instructionsFilePath (string, optional): absolute path to a markdown instructions file prepended to the run prompt
 - promptTemplate (string, optional): overrides the default Paperclip heartbeat prompt
 - bootstrapPromptTemplate (string, optional): extra prompt text injected only on the first run of a conversation
+- filesystemScope (string, optional): "workspace" confines agy with Paperclip's Bubblewrap sandbox (same contract as claude_local): only the workspace, agy's state dir (~/.gemini, read-write) and the synced skill root (read-only) are visible; the rest of $HOME is hidden. Requires bwrap on the host.
+- filesystemExtraPaths (array, optional): extra absolute host paths inside the sandbox; strings are read-only, objects use { path, access: "ro" | "rw" }.
+- networkScope / networkAllowlist (optional): same as claude_local ("deny" or "allowlist" through Paperclip's proxy).
 - sandbox (boolean, optional): pass agy --sandbox (default false — Paperclip owns the execution boundary)
 - disableSlashCommands (boolean, optional): pass agy --disable-slash-commands
 - extraArgs (string[], optional): additional agy arguments

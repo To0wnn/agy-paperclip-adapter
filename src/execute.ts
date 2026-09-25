@@ -31,6 +31,13 @@ import {
   stringifyPaperclipWakePayload,
 } from "@paperclipai/adapter-utils/server-utils";
 import { buildAdapterEnvConfig } from "@paperclipai/adapter-utils";
+import {
+  parseLocalProcessFilesystemScope,
+  parseLocalProcessNetworkAllowlist,
+  parseLocalProcessNetworkScope,
+  parseLocalProcessSandboxExtraPaths,
+} from "@paperclipai/adapter-utils/local-process-sandbox";
+import os from "node:os";
 import type {
   AdapterExecutionContext,
   AdapterExecutionResult,
@@ -286,6 +293,40 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     ...built.notes,
   ];
 
+  // ── Paperclip local-process sandbox (filesystemScope / networkScope) ──────
+  // Same contract as claude_local: with filesystemScope="workspace" agy runs in a
+  // Bubblewrap root that only exposes the workspace, agy's own state dir (~/.gemini:
+  // OAuth token, conversations, global skills) and the synced skill root. Everything
+  // else under $HOME (Paperclip board keys, server env files, other repos) is hidden.
+  const filesystemScope = parseLocalProcessFilesystemScope(config.filesystemScope);
+  const networkScope = parseLocalProcessNetworkScope(config.networkScope);
+  const agyStateDir = path.join(os.homedir(), ".gemini");
+  const localProcessSandbox =
+    (filesystemScope || networkScope) && !executionTargetIsRemote
+      ? {
+          workspaceDir: effectiveExecutionCwd,
+          filesystemScope,
+          managedPaths: [
+            { path: agyStateDir, access: "rw" as const },
+            ...(skillsAddDir ? [{ path: skillsAddDir, access: "ro" as const }] : []),
+          ],
+          extraPaths: parseLocalProcessSandboxExtraPaths(config.filesystemExtraPaths),
+          homeDir: filesystemScope ? os.homedir() : null,
+          networkScope,
+          networkAllowlist: parseLocalProcessNetworkAllowlist(config.networkAllowlist),
+          networkTrustedUrls: [env.PAPERCLIP_API_URL].filter(
+            (value): value is string => typeof value === "string" && value.length > 0,
+          ),
+          command: asString(config.filesystemSandboxCommand, "bwrap"),
+        }
+      : null;
+  if (localProcessSandbox) {
+    const scopes = [filesystemScope ? "workspace filesystem" : null, networkScope ? `${networkScope} network` : null]
+      .filter(Boolean)
+      .join(" + ");
+    await onLog("stdout", `[paperclip] Confining agy with ${scopes} scope.\n`);
+  }
+
   const runAttempt = async (resumeConversationId: string | null) => {
     const args = buildAgyArgs({
       prompt: built.prompt,
@@ -327,6 +368,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       onSpawn,
       onLog,
       onRuntimeProgress: ctx.onRuntimeProgress,
+      localProcessSandbox,
     });
 
     return { proc, parsed: parseAgyJsonl(proc.stdout) };
